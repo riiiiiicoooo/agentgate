@@ -2,7 +2,7 @@
 
 **AI Agent Authentication & Authorization Gateway — securing how AI coding agents access secrets, APIs, and infrastructure across 340+ developer environments with zero-trust policy enforcement**
 
-Built for a Series B developer tools company (75-person engineering org) that had adopted AI coding agents across all teams — Copilot, Cursor, and internal LLM-powered automation — but had no governance over what those agents could access. After a near-miss where a CI/CD agent auto-committed a production database credential to a public PR, the VP of Engineering engaged our team to build a centralized auth and authorization layer specifically designed for non-human identities. AgentGate gives platform engineering a single pane of glass to register AI agents, define scoped access policies, broker just-in-time secrets with automatic revocation, and maintain a full audit trail of every action every agent takes.
+Built for a small developer tools company that had adopted AI coding agents across all teams — Copilot, Cursor, and internal LLM-powered automation — but had no governance over what those agents could access. After a near-miss where a CI/CD agent auto-committed a production database credential to a public PR, the VP of Engineering engaged our team to build a centralized auth and authorization layer specifically designed for non-human identities. AgentGate gives platform engineering a single pane of glass to register AI agents, define scoped access policies, broker just-in-time secrets with automatic revocation, and maintain a full audit trail of every action every agent takes.
 
 ---
 
