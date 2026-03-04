@@ -6,10 +6,6 @@ Built for a small developer tools company that had adopted AI coding agents acro
 
 ---
 
-> **Portfolio Context:** This is a product management portfolio project. The code represents PM-authored reference implementations that demonstrate architecture decisions, data modeling, and system design. These prototypes were used to align engineering teams, validate technical feasibility, and communicate product requirements. They are not production-deployed code.
-
----
-
 ## The Problem
 
 A fast-growing developer tools company had rolled out AI coding agents to all 12 engineering squads. Developers were using GitHub Copilot, Cursor, and Claude Code daily, and the platform team had built 8 internal LLM-powered agents for code review, deployment, and data pipeline automation. But the security posture hadn't kept pace:
@@ -324,9 +320,52 @@ agentgate/
 
 ---
 
-## About
+## Business Context
 
-Built by [Ampersand Consulting](https://github.com/riiiiiicoooo) — a product management consultancy that helps companies ship AI-powered products. AgentGate was built for a Series B developer tools company to secure AI agent access across 340+ developer environments.
+### Market Size
+~15,000 software companies with 50+ engineers actively using AI coding agents (GitHub Copilot, Cursor, Claude Code). Non-human identity management is a $3.2B market growing 35% annually (Gartner Identity Security, 2025), with AI agent identity as the fastest-growing subsegment.
+
+### Unit Economics
+
+| Metric | Value |
+|--------|-------|
+| **Before** | |
+| Secret exposure incidents/year | 23 |
+| Remediation cost per incident | $4K |
+| Token overrun cost/year | $50K |
+| Manual credential management time/year | $180K |
+| **Total annual cost** | **$92K + $50K + $180K** |
+| **After** | |
+| Secret exposure incidents/year | 0 |
+| Token overrun cost/year | $0 |
+| Platform management time/year | $18K |
+| **Total annual cost** | **$18K** |
+| **Annual savings** | **$304K** |
+| **Platform build cost** | **$200,000** |
+| **Monthly run rate** | **$900** |
+| **Payback period** | **8 months** |
+| **3-year ROI** | **4.2x** |
+
+### Pricing Model
+If productized: $2,000-8,000/month based on agent count and developer seats, targeting $8-15M ARR at 500 companies.
+
+---
+
+## PM Perspective
+
+The hardest decision was whether to build a custom policy language or use OPA/Rego directly. OPA is the industry standard, but it has a steep learning curve — most developers on the team hadn't written Rego before. A custom RBAC system would be simpler to adopt but less powerful. I chose an OPA/Rego-inspired DSL that uses the same concepts (rules, conditions, resource matching) but with a simplified syntax that maps to the team's mental model. Platform engineers who knew Rego could write native policies; everyone else used the simplified syntax. Adoption was 100% within 3 weeks, which wouldn't have happened with raw Rego.
+
+The surprise was learning that the $4,200 runaway token incident wasn't an anomaly — it was the norm waiting to happen. During discovery, I audited all 8 internal agents' token consumption over 30 days. Three of them had no error handling for retry loops — if an LLM call failed, they'd retry indefinitely. One agent was burning $800/month just on retries against rate limits. The token budgeting feature I scoped as a "nice to have" became the #2 priority after the VP of Engineering saw the audit data. What I thought was a security product turned out to be equally a cost management product.
+
+What I'd do differently: I would have shipped the Grafana dashboards in Phase 2 alongside the core platform instead of Phase 3. For the first 3 weeks after launch, the only way to see agent activity was querying the audit log API directly. Platform engineers had to write custom scripts to answer basic questions like "which agents are most active?" and "what's our daily token spend?" The dashboard was trivial to build but made the product feel complete. Missing it at launch meant we had a security product that nobody could easily observe.
+
+---
+
+## About This Project
+
+Built as a product management engagement for a Series B developer tools company (75-person engineering org) that had adopted AI coding agents across all 12 squads with zero governance over what those agents could access. I led discovery across platform engineering, security, and all 12 squad leads to map agent access patterns and secret sprawl. Designed the zero-trust architecture with OAuth 2.0 client credentials, OPA/Rego policy engine, and JIT secret leasing. Made build-vs-buy decisions on secrets management (multi-provider abstraction vs. Vault-only) and policy language (OPA-inspired vs. custom RBAC). Defined the TypeScript SDK and CLI developer experience based on platform team interviews.
+
+**Note:** Client-identifying details have been anonymized. Code represents the architecture and design decisions I drove; production deployments were managed by client engineering teams.
 
 ## License
 
