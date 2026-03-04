@@ -1,0 +1,268 @@
+{
+  "data_asset_type": "Table",
+  "expectation_suite_name": "audit_log_quality",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": {
+        "min_value": 1,
+        "max_value": 10000000
+      },
+      "meta": {
+        "description": "Audit log should have reasonable number of rows",
+        "alert_on_failure": true
+      }
+    },
+    {
+      "expectation_type": "expect_table_columns_to_match_ordered_list",
+      "kwargs": {
+        "column_list": [
+          "event_id",
+          "timestamp",
+          "agent_id",
+          "agent_type",
+          "action",
+          "resource",
+          "decision",
+          "denial_reason",
+          "ip_address",
+          "request_id",
+          "details",
+          "created_at"
+        ]
+      },
+      "meta": {
+        "description": "Audit log must have all required columns"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "event_id"
+      },
+      "meta": {
+        "description": "event_id is required and must never be null"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "timestamp"
+      },
+      "meta": {
+        "description": "timestamp is required and must never be null"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "agent_id"
+      },
+      "meta": {
+        "description": "agent_id is required and must never be null"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "action"
+      },
+      "meta": {
+        "description": "action is required and must never be null"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "decision"
+      },
+      "meta": {
+        "description": "decision is required and must never be null"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "decision",
+        "value_set": ["ALLOW", "DENY"]
+      },
+      "meta": {
+        "description": "decision must be either ALLOW or DENY"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "action",
+        "value_set": [
+          "AUTH",
+          "AUTH_FAILED",
+          "SECRET_ACCESS",
+          "SECRET_LEASE_REQUESTED",
+          "SECRET_LEASED",
+          "SECRET_ROTATED",
+          "CREDENTIAL_ROTATED",
+          "POLICY_EVALUATION",
+          "POLICY_VIOLATION",
+          "AGENT_REGISTERED",
+          "AGENT_UPDATED",
+          "AGENT_DELETED",
+          "AUDIT_QUERY"
+        ]
+      },
+      "meta": {
+        "description": "action must be one of the defined action types"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "event_id",
+        "regex": "^event-\\d{4,}$"
+      },
+      "meta": {
+        "description": "event_id must match format: event-XXXX"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "agent_id",
+        "regex": "^[a-z0-9-]+$"
+      },
+      "meta": {
+        "description": "agent_id must contain only alphanumeric and hyphens"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_strftime_format",
+      "kwargs": {
+        "column": "timestamp",
+        "strftime_format": "%Y-%m-%dT%H:%M:%S"
+      },
+      "meta": {
+        "description": "timestamp must be ISO 8601 format"
+      }
+    },
+    {
+      "expectation_type": "expect_column_value_lengths_to_be_between",
+      "kwargs": {
+        "column": "agent_id",
+        "min_value": 5,
+        "max_value": 100
+      },
+      "meta": {
+        "description": "agent_id must be reasonable length"
+      }
+    },
+    {
+      "expectation_type": "expect_column_value_lengths_to_be_between",
+      "kwargs": {
+        "column": "action",
+        "min_value": 3,
+        "max_value": 50
+      },
+      "meta": {
+        "description": "action must be reasonable length"
+      }
+    },
+    {
+      "expectation_type": "expect_column_distinct_values_to_be_in_set",
+      "kwargs": {
+        "column": "decision",
+        "value_set": ["ALLOW", "DENY"]
+      },
+      "meta": {
+        "description": "decision should only have 2 distinct values"
+      }
+    },
+    {
+      "expectation_type": "expect_column_distinct_values_to_be_greater_than",
+      "kwargs": {
+        "column": "agent_id",
+        "value": 1
+      },
+      "meta": {
+        "description": "Should have multiple distinct agents"
+      }
+    },
+    {
+      "expectation_type": "expect_column_proportion_of_unique_values_to_be_between",
+      "kwargs": {
+        "column": "event_id",
+        "min_value": 0.99,
+        "max_value": 1.0
+      },
+      "meta": {
+        "description": "event_id should be nearly unique (at least 99%)"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_match_regex",
+      "kwargs": {
+        "column": "agent_id",
+        "regex": "admin.*secret.*"
+      },
+      "meta": {
+        "description": "Sensitive strings should not appear in agent_id"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_type_list",
+      "kwargs": {
+        "column": "timestamp",
+        "type_list": ["TIMESTAMP", "DATETIME", "VARCHAR"]
+      },
+      "meta": {
+        "description": "timestamp should be timestamp or datetime type"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_type_list",
+      "kwargs": {
+        "column": "agent_id",
+        "type_list": ["VARCHAR", "TEXT", "STRING"]
+      },
+      "meta": {
+        "description": "agent_id should be text type"
+      }
+    },
+    {
+      "expectation_type": "expect_compound_columns_to_be_unique",
+      "kwargs": {
+        "column_list": ["event_id"]
+      },
+      "meta": {
+        "description": "event_id should be unique across all rows"
+      }
+    },
+    {
+      "expectation_type": "expect_multicolumn_values_to_be_unique",
+      "kwargs": {
+        "column_list": ["agent_id", "timestamp"]
+      },
+      "meta": {
+        "description": "Same agent should not have same timestamp twice"
+      }
+    },
+    {
+      "expectation_type": "expect_column_quantile_values_to_be_between",
+      "kwargs": {
+        "column": "created_at",
+        "quantile": 0.5,
+        "min_value": "2026-01-01",
+        "max_value": "2026-12-31"
+      },
+      "meta": {
+        "description": "Half of events should be from current year",
+        "threshold": 0.9
+      }
+    }
+  ],
+  "meta": {
+    "great_expectations_version": "0.15.50",
+    "created_datetime": "2026-03-04T10:00:00Z",
+    "modified_datetime": "2026-03-04T10:00:00Z",
+    "description": "Data quality expectations for AgentGate audit logs"
+  }
+}

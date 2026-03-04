@@ -1,0 +1,51 @@
+{
+  "name": "agentgate",
+  "version": "1.0.0",
+  "description": "Secure authentication and authorization gateway for AI coding agents",
+  "private": true,
+  "workspaces": [
+    "sdk-typescript",
+    "cli",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "format": "prettier --write --ignore-path .gitignore '**/*.{ts,tsx,js,jsx,json,md}'",
+    "type-check": "npm run type-check --workspaces",
+    "docker:build": "docker build -t agentgate:latest .",
+    "docker:dev": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f api",
+    "docs": "mkdocs serve"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "author": "Jacob",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/riiiiiicoooo/agentgate.git"
+  },
+  "keywords": [
+    "ai-agents",
+    "identity",
+    "authorization",
+    "secrets",
+    "security",
+    "oauth",
+    "oidc"
+  ]
+}

@@ -1,0 +1,279 @@
+# AgentGate Cursor AI Rules
+
+You are an AI coding assistant working on AgentGate, an enterprise authentication and authorization platform for AI coding agents. Follow these rules to maintain code quality and consistency.
+
+## Project Context
+
+**Project**: AgentGate - Secure identity and access management for AI agents
+**Tech Stack**:
+- Backend: FastAPI (Python 3.9+)
+- Database: PostgreSQL + Supabase
+- Cache: Redis
+- Frontend: Next.js (React 18)
+- SDK: Python and TypeScript
+
+**Key Paths**:
+- API: `/api/` (FastAPI application)
+- SDK Python: `/sdk-python/`
+- SDK TypeScript: `/sdk-typescript/`
+- CLI: `/cli/`
+- Dashboard: `/dashboard/` (Next.js)
+- Docs: `/docs/`
+
+## Code Style Guidelines
+
+### Python
+- Follow PEP 8 style guide
+- Use type hints on all function parameters and returns
+- Use `black` for code formatting
+- Use `flake8` for linting
+- Use `pytest` for testing
+- Max line length: 100 characters
+- Docstrings: Google style (triple-quoted)
+
+Example:
+```python
+async def request_secret(
+    agent_id: str,
+    secret_name: str,
+    ttl_seconds: int = 3600
+) -> SecretResponse:
+    """Request a secret from the broker.
+
+    Args:
+        agent_id: Unique agent identifier
+        secret_name: Name of the secret to request
+        ttl_seconds: Time-to-live for the lease
+
+    Returns:
+        SecretResponse with secret value and expiry
+
+    Raises:
+        AuthorizationError: If policy denies access
+        SecretNotFoundError: If secret doesn't exist
+    """
+```
+
+### TypeScript
+- Follow Google TypeScript style guide
+- Use strict mode (strict: true in tsconfig)
+- Use ESLint with React plugin
+- Use Prettier for formatting
+- Max line length: 100 characters
+- JSDoc comments on public functions
+
+Example:
+```typescript
+export async function getSecret(
+  client: AgentGateClient,
+  secretName: string,
+  options?: SecretRequestOptions
+): Promise<SecretResponse> {
+  /**
+   * Request a secret from AgentGate
+   * @param client The AgentGate client
+   * @param secretName Name of the secret
+   * @param options Optional request parameters
+   * @returns Promise resolving to SecretResponse
+   * @throws AuthorizationError if access denied
+   */
+}
+```
+
+## Architecture Principles
+
+1. **Security First**
+   - All user input is untrusted
+   - Use constant-time comparison for secrets
+   - Never log secrets or tokens
+   - Encrypt sensitive data at rest
+   - Validate JWT signatures
+
+2. **Audit Trail**
+   - Every agent action must be logged
+   - Include decision (ALLOW/DENY) in logs
+   - Include reason for decision
+   - Include source IP and user-agent
+   - Immutable audit table (no UPDATE/DELETE)
+
+3. **Error Handling**
+   - Return specific error codes (401, 403, 404, 500)
+   - Include error message and recovery suggestion
+   - Log stack traces only for 500 errors
+   - Never expose internal system details in error messages
+
+4. **Performance**
+   - Cache policy evaluation results (5-min TTL)
+   - Batch write audit logs (async)
+   - Use connection pooling for database
+   - Monitor query latency (log if >100ms)
+
+5. **Testing**
+   - Minimum 80% code coverage
+   - Unit tests for business logic
+   - Integration tests for API endpoints
+   - Security tests for auth/authz
+   - Load tests for performance targets
+
+## Feature Development Checklist
+
+When implementing a feature, ensure you:
+
+- [ ] Write tests first (TDD approach)
+- [ ] Update database schema (with migration)
+- [ ] Update API documentation (OpenAPI)
+- [ ] Update CLI commands (if applicable)
+- [ ] Add audit logging
+- [ ] Update dashboard UI (if applicable)
+- [ ] Update README and docs
+- [ ] Update .env.example with new config vars
+- [ ] Add to METRICS.md if new metrics
+- [ ] Create ADR if architectural decision
+
+## Database Guidelines
+
+- Use UUIDs for all primary keys
+- Include `created_at` and `updated_at` timestamps
+- Use JSONB for flexible fields
+- Add indexes for common queries
+- Never store secrets or tokens unencrypted
+- Audit table must be immutable (constraints)
+- Use Row-Level Security for multi-tenancy
+
+Example migration:
+```python
+def upgrade():
+    op.create_table('agents',
+        sa.Column('id', postgresql.UUID(), nullable=False),
+        sa.Column('name', sa.String(255), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('name'),
+    )
+    op.create_index('idx_agents_created_at', 'agents', ['created_at'])
+```
+
+## API Endpoint Guidelines
+
+- Use RESTful conventions (GET, POST, PUT, DELETE)
+- Return JSON responses with standard envelope
+- Include status in response (e.g., "success" or "error")
+- Include request ID for tracing
+- Require authentication on all endpoints except /health
+
+Example endpoint:
+```python
+@router.get("/agents/{agent_id}")
+async def get_agent(
+    agent_id: str,
+    current_user: User = Depends(verify_token)
+) -> AgentResponse:
+    """Get agent details. Requires authentication."""
+    try:
+        agent = await db.agents.get(agent_id)
+        return AgentResponse(status="success", data=agent)
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="Agent not found")
+```
+
+## CLI Guidelines
+
+- Use Typer for CLI framework
+- All commands require authentication (API token)
+- Include `--help` on all commands
+- Use consistent output formatting
+- Support `--output json` for scripting
+
+Example command:
+```python
+@app.command()
+def agent_create(
+    name: str = typer.Option(..., help="Agent name"),
+    agent_type: str = typer.Option(..., help="Type: github-copilot, cursor, etc"),
+    output: str = typer.Option("text", help="Output format: text or json"),
+):
+    """Create a new agent."""
+    client = AgentGateClient()
+    result = client.agents.create(name=name, agent_type=agent_type)
+    if output == "json":
+        print(json.dumps(result.dict()))
+    else:
+        print(f"Created agent: {result.client_id}")
+```
+
+## Documentation Guidelines
+
+- Update docs when changing APIs
+- Include examples for all features
+- Update ARCHITECTURE.md for major changes
+- Update DECISION_LOG.md for architectural decisions
+- Keep README.md up-to-date
+
+## Security Checklist
+
+Before shipping code:
+- [ ] No hardcoded secrets in code
+- [ ] Validate all inputs (type, length, format)
+- [ ] Check authorization before accessing data
+- [ ] Never log secrets, tokens, or PII
+- [ ] Use HTTPS in production
+- [ ] Use constant-time string comparison for secrets
+- [ ] Add security headers (Content-Security-Policy, etc)
+- [ ] Sanitize error messages (don't leak internal details)
+- [ ] Log all failed authentication attempts
+
+## Testing Template
+
+```python
+@pytest.mark.asyncio
+async def test_request_secret_allowed():
+    """Test that agents with permission can request secrets."""
+    client = AgentGateClient(client_id="test-id", client_secret="test-secret")
+    response = await client.get_secret("db_password")
+
+    assert response.status_code == 200
+    assert response.secret is not None
+    assert response.expires_at > datetime.now()
+
+@pytest.mark.asyncio
+async def test_request_secret_denied():
+    """Test that agents without permission get denied."""
+    client = AgentGateClient(client_id="test-id", client_secret="test-secret")
+
+    with pytest.raises(AuthorizationError):
+        await client.get_secret("prod_db_password")
+```
+
+## Performance Targets
+
+Keep these latency targets in mind:
+
+- **Token issuance**: <20ms (P95)
+- **Secret request (cached)**: <50ms (P95)
+- **Secret request (fresh)**: <100ms (P95)
+- **Policy evaluation**: <30ms (P95)
+- **Audit write**: <10ms (P95)
+
+If a query takes >100ms, log it and investigate.
+
+## Deployment Considerations
+
+- Docker images must be <200MB
+- Zero-downtime deployments via rolling updates
+- Health checks on /health endpoint
+- Graceful shutdown (drain connections)
+- Database migrations run before server start
+
+## When in Doubt
+
+1. Check existing code patterns in this repo
+2. Review ARCHITECTURE.md for system design
+3. Check DECISION_LOG.md for previous decisions
+4. Look at similar features already implemented
+5. Ask: "Is this secure? Auditable? Testable? Performant?"
+
+---
+
+**Last Updated**: 2024-01-15
+**Maintainer**: Jacob (GitHub: riiiiiicoooo)

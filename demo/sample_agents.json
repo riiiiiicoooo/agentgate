@@ -1,0 +1,207 @@
+{
+  "agents": [
+    {
+      "agent_id": "copilot-github-001",
+      "agent_name": "GitHub Copilot",
+      "agent_type": "copilot",
+      "description": "AI code completion and generation powered by Codex",
+      "organization": "GitHub",
+      "version": "1.2.5",
+      "scopes": [
+        "repo:read",
+        "repo:write",
+        "pull_request:read",
+        "pull_request:write",
+        "secrets:read"
+      ],
+      "permissions": {
+        "can_read_code": true,
+        "can_write_code": true,
+        "can_access_secrets": true,
+        "can_delete_resources": false,
+        "can_modify_policies": false
+      },
+      "mfa_required": false,
+      "credential_rotation_required": true,
+      "rotation_interval_days": 90,
+      "token_ttl_hours": 24,
+      "rate_limit": {
+        "requests_per_minute": 1000,
+        "requests_per_hour": 100000,
+        "burst_allowance": 100
+      },
+      "created_at": "2025-06-01T10:00:00Z",
+      "last_rotated": "2026-02-15T14:30:00Z",
+      "status": "active",
+      "metadata": {
+        "support_email": "support@github.com",
+        "documentation": "https://docs.github.com/copilot",
+        "risk_level": "medium"
+      }
+    },
+    {
+      "agent_id": "cursor-editor-001",
+      "agent_name": "Cursor Editor",
+      "agent_type": "editor",
+      "description": "VS Code fork with AI integration for intelligent code editing",
+      "organization": "Cursor",
+      "version": "0.42.0",
+      "scopes": [
+        "repo:read",
+        "repo:write",
+        "deploy:read",
+        "audit:read"
+      ],
+      "permissions": {
+        "can_read_code": true,
+        "can_write_code": true,
+        "can_access_secrets": false,
+        "can_delete_resources": false,
+        "can_modify_policies": false
+      },
+      "mfa_required": true,
+      "mfa_verified": true,
+      "credential_rotation_required": true,
+      "rotation_interval_days": 60,
+      "token_ttl_hours": 12,
+      "rate_limit": {
+        "requests_per_minute": 500,
+        "requests_per_hour": 50000,
+        "burst_allowance": 50
+      },
+      "created_at": "2025-08-20T09:15:00Z",
+      "last_rotated": "2026-01-30T11:45:00Z",
+      "status": "active",
+      "metadata": {
+        "support_email": "support@cursor.sh",
+        "documentation": "https://docs.cursor.sh",
+        "risk_level": "medium"
+      }
+    },
+    {
+      "agent_id": "claude-code-001",
+      "agent_name": "Claude Code",
+      "agent_type": "ide",
+      "description": "Anthropic's Claude integrated development environment for terminal and IDE integration",
+      "organization": "Anthropic",
+      "version": "2.1.0",
+      "scopes": [
+        "repo:read",
+        "repo:write",
+        "secrets:read",
+        "audit:read",
+        "deploy:read"
+      ],
+      "permissions": {
+        "can_read_code": true,
+        "can_write_code": true,
+        "can_access_secrets": true,
+        "can_delete_resources": false,
+        "can_modify_policies": false
+      },
+      "mfa_required": false,
+      "credential_rotation_required": true,
+      "rotation_interval_days": 30,
+      "token_ttl_hours": 48,
+      "rate_limit": {
+        "requests_per_minute": 2000,
+        "requests_per_hour": 200000,
+        "burst_allowance": 200
+      },
+      "created_at": "2025-05-10T08:00:00Z",
+      "last_rotated": "2026-02-20T16:20:00Z",
+      "status": "active",
+      "metadata": {
+        "support_email": "support@anthropic.com",
+        "documentation": "https://docs.anthropic.com/claude-code",
+        "risk_level": "low"
+      }
+    },
+    {
+      "agent_id": "ci-pipeline-deploy-001",
+      "agent_name": "CI/CD Pipeline Agent",
+      "agent_type": "pipeline",
+      "description": "GitHub Actions / GitLab CI runner for automated build, test, and deployment",
+      "organization": "Internal",
+      "version": "2.0.1",
+      "scopes": [
+        "repo:read",
+        "repo:write",
+        "secrets:read",
+        "deploy:read",
+        "deploy:write",
+        "audit:read"
+      ],
+      "permissions": {
+        "can_read_code": true,
+        "can_write_code": true,
+        "can_access_secrets": true,
+        "can_delete_resources": false,
+        "can_modify_policies": false
+      },
+      "mfa_required": false,
+      "environment_restricted": "production",
+      "credential_rotation_required": true,
+      "rotation_interval_days": 14,
+      "token_ttl_hours": 2,
+      "rate_limit": {
+        "requests_per_minute": 5000,
+        "requests_per_hour": 500000,
+        "burst_allowance": 500
+      },
+      "created_at": "2025-03-15T12:00:00Z",
+      "last_rotated": "2026-02-25T09:00:00Z",
+      "status": "active",
+      "metadata": {
+        "support_email": "devops@company.internal",
+        "documentation": "https://wiki.company.internal/ci-cd",
+        "risk_level": "high"
+      }
+    },
+    {
+      "agent_id": "custom-internal-agent-001",
+      "agent_name": "Custom Internal Analytics Agent",
+      "agent_type": "custom",
+      "description": "Internal custom agent for analytics and data pipeline orchestration",
+      "organization": "Internal",
+      "version": "1.0.0",
+      "scopes": [
+        "repo:read",
+        "secrets:read",
+        "audit:read",
+        "analytics:write"
+      ],
+      "permissions": {
+        "can_read_code": true,
+        "can_write_code": false,
+        "can_access_secrets": true,
+        "can_delete_resources": false,
+        "can_modify_policies": false
+      },
+      "mfa_required": false,
+      "credential_rotation_required": true,
+      "rotation_interval_days": 45,
+      "token_ttl_hours": 8,
+      "rate_limit": {
+        "requests_per_minute": 100,
+        "requests_per_hour": 10000,
+        "burst_allowance": 20
+      },
+      "created_at": "2025-10-01T14:30:00Z",
+      "last_rotated": "2026-02-10T13:00:00Z",
+      "status": "active",
+      "metadata": {
+        "support_email": "analytics-team@company.internal",
+        "documentation": "https://wiki.company.internal/analytics-agent",
+        "risk_level": "low"
+      }
+    }
+  ],
+  "metadata": {
+    "total_agents": 5,
+    "active_agents": 5,
+    "inactive_agents": 0,
+    "generated_at": "2026-03-04T10:00:00Z",
+    "version": "1.0"
+  }
+}

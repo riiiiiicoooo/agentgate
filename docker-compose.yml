@@ -1,0 +1,192 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: agentgate-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: YOUR_POSTGRES_PASSWORD
+      POSTGRES_DB: agentgate
+      POSTGRES_INITDB_ARGS: "-c max_connections=200"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentgate-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: agentgate-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentgate-network
+
+  # API Server
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: agentgate-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:YOUR_POSTGRES_PASSWORD@postgres:5432/agentgate
+      REDIS_URL: redis://redis:6379
+      API_SECRET_KEY: YOUR_SECRET_KEY_FOR_JWT
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      ENVIRONMENT: development
+      DEBUG: "true"
+      OTEL_EXPORTER_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./api:/app/api
+      - ./docs:/app/docs
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    networks:
+      - agentgate-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Dashboard (Next.js)
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: agentgate-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:8000
+      NODE_ENV: development
+    depends_on:
+      - api
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    networks:
+      - agentgate-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Jaeger Tracing (OpenTelemetry)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: agentgate-jaeger
+    ports:
+      - "6831:6831/udp"  # Jaeger agent port
+      - "16686:16686"    # Jaeger UI
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - agentgate-network
+
+  # Prometheus (Metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: agentgate-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    depends_on:
+      - api
+    networks:
+      - agentgate-network
+
+  # Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: agentgate-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: YOUR_GRAFANA_PASSWORD
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - agentgate-network
+
+  # OPA (Policy Engine) - Optional
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: agentgate-opa
+    ports:
+      - "8181:8181"
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=info"
+      - "--log-format=json"
+    volumes:
+      - ./policies:/policies:ro
+    networks:
+      - agentgate-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  agentgate-network:
+    driver: bridge
+
+# Instructions:
+# 1. Copy .env.example to .env and fill in YOUR_* values
+# 2. Run: docker-compose up -d
+# 3. Access:
+#    - API: http://localhost:8000
+#    - Dashboard: http://localhost:3000
+#    - Jaeger UI: http://localhost:16686
+#    - Prometheus: http://localhost:9090
+#    - Grafana: http://localhost:3001
+#    - OPA: http://localhost:8181
+# 4. Check logs: docker-compose logs -f api
+# 5. Stop: docker-compose down

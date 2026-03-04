@@ -1,0 +1,101 @@
+config_version: 3.0
+
+datasources:
+  audit_db:
+    class_name: SqlAlchemyDatasource
+    execution_engine:
+      class_name: SqlAlchemyExecutionEngine
+      connection_string: postgresql://user:password@localhost:5432/agentgate
+    assets:
+      audit_logs:
+        class_name: Table
+        table_name: audit_logs
+      agents:
+        class_name: Table
+        table_name: agents
+      credentials:
+        class_name: Table
+        table_name: credentials
+
+  audit_s3:
+    class_name: PandasDatasource
+    assets:
+      audit_exports:
+        class_name: Asset
+        path: s3://agentgate-audit-logs/exports/
+
+stores:
+  expectations_store:
+    class_name: ExpectationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: /sessions/youthful-eager-lamport/mnt/Portfolio/agentgate/data_quality/expectations
+
+  validations_store:
+    class_name: ValidationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: /sessions/youthful-eager-lamport/mnt/Portfolio/agentgate/data_quality/validations
+
+  metrics_store:
+    class_name: MetricsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: /sessions/youthful-eager-lamport/mnt/Portfolio/agentgate/data_quality/metrics
+
+validation_operators:
+  action_list_operator:
+    class_name: ActionListValidationOperator
+    action_list:
+      - class_name: SlackNotificationAction
+        slack_webhook: YOUR_SLACK_WEBHOOK_URL
+        notify_on: failure
+      - class_name: PagerDutyNotificationAction
+        integration_key: YOUR_PAGERDUTY_INTEGRATION_KEY
+        notify_on: failure
+      - class_name: EmailNotificationAction
+        smtp_address: smtp.gmail.com
+        smtp_port: 465
+        sender_login: YOUR_EMAIL_ADDRESS
+        sender_password: YOUR_EMAIL_PASSWORD
+        receiver_emails:
+          - security-team@example.com
+        notify_on: failure
+
+notebooktemplates_store:
+  class_name: NotebookTemplatesStore
+  store_backend:
+    class_name: TupleFilesystemStoreBackend
+    base_directory: /sessions/youthful-eager-lamport/mnt/Portfolio/agentgate/data_quality/notebooks
+
+# Data Quality Checks Schedule
+data_docs_sites:
+  s3_site:
+    class_name: SiteBuilder
+    show_cta_footer: true
+    store_backend:
+      class_name: TupleS3StoreBackend
+      bucket: agentgate-data-docs
+      prefix: dq-results
+
+# Checkpoint configuration for continuous validation
+checkpoints:
+  audit_log_quality_check:
+    validationOperatorName: action_list_operator
+    validations:
+      - name: audit_log_quality
+        expectationSuiteName: audit_log_quality
+
+  credential_health_check:
+    validationOperatorName: action_list_operator
+    validations:
+      - name: credential_health
+        expectationSuiteName: agent_credential_health
+
+# Profiling configuration
+profiling_datasources:
+  - datasource_name: audit_db
+    assets:
+      - asset_name: audit_logs
+        batch_request:
+          data_asset_name: audit_logs

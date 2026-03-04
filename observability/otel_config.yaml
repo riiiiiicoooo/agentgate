@@ -1,0 +1,180 @@
+# OpenTelemetry Collector Configuration for AgentGate
+# Collects traces, metrics, and logs from AgentGate services
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'agentgate'
+          static_configs:
+            - targets: ['localhost:8000']
+          scrape_interval: 15s
+          scrape_timeout: 10s
+
+  loki:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:3100
+
+  syslog:
+    listen_address: "0.0.0.0:514"
+    protocol_config:
+      protocol: rfc5424
+
+  jaeger:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:14250
+      thrift_http:
+        endpoint: 0.0.0.0:14268
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  attributes:
+    actions:
+      - key: service.name
+        value: agentgate
+        action: insert
+      - key: deployment.environment
+        value: production
+        action: insert
+
+  resource_detection:
+    detectors: [env, system, docker, kubernetes]
+    timeout: 5s
+
+  span:
+    name:
+      to_attributes:
+        rules:
+          - ^/auth/.*
+          - ^/agents/.*
+          - ^/secrets/.*
+          - ^/policies/.*
+          - ^/audit/.*
+
+  tail_sampling:
+    policies:
+      - name: error-traces
+        type: status_code
+        status_code:
+          status_codes: [ERROR, UNSET]
+      - name: slow-traces
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: security-traces
+        type: string_attribute
+        string_attribute:
+          key: security.event
+          values: ['injection_detected', 'auth_failed', 'policy_violation']
+      - name: sample-all
+        type: always_sample
+
+exporters:
+  otlp:
+    endpoint: localhost:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+  jaeger:
+    endpoint: localhost:14250
+    tls:
+      insecure: true
+
+  logging:
+    loglevel: debug
+
+  loki:
+    endpoint: http://localhost:3100/loki/api/v1/push
+
+  datadog:
+    api:
+      key: YOUR_DATADOG_API_KEY
+      site: datadoghq.com
+    host_metadata:
+      enabled: true
+
+  newrelic:
+    apikey: YOUR_NEWRELIC_API_KEY
+    timeout: 30s
+
+extensions:
+  health_check:
+    endpoint: :13133
+
+  pprof:
+    endpoint: localhost:1777
+
+  zpages:
+    endpoint: localhost:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+
+  pipelines:
+    traces:
+      receivers: [otlp, jaeger]
+      processors: [memory_limiter, batch, attributes, resource_detection, tail_sampling]
+      exporters: [otlp, logging, datadog, jaeger]
+
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch, attributes, resource_detection]
+      exporters: [prometheus, datadog, newrelic]
+
+    logs:
+      receivers: [otlp, syslog]
+      processors: [memory_limiter, batch, attributes, resource_detection]
+      exporters: [logging, loki, datadog]
+
+# Configuration for trace sampling
+# Only sample traces matching certain criteria to reduce volume
+sampling:
+  error_traces: 100%  # Always sample traces with errors
+  slow_traces: 50%    # Sample 50% of traces slower than 1 second
+  security_events: 100%  # Always sample security-related traces
+  normal_traces: 1%   # Sample only 1% of normal fast traces
+
+# Resource attributes to attach to all telemetry
+resources:
+  service.name: agentgate
+  service.version: "1.0.0"
+  deployment.environment: production
+  deployment.region: us-east-1
+  organization: acme-corp
+
+# Correlation context for linking traces across services
+propagators:
+  - tracecontext
+  - jaeger
+  - b3
+  - b3multi
+  - xray
+  - ottrace
+
+# Instrumentation scope versions
+scopes:
+  auth-instrumentation: "1.0.0"
+  policy-engine-instrumentation: "1.0.0"
+  secrets-broker-instrumentation: "1.0.0"
+  audit-logger-instrumentation: "1.0.0"
+  gateway-instrumentation: "1.0.0"
