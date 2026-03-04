@@ -294,6 +294,36 @@ agentgate/
 | [Contract Intelligence Platform](https://github.com/riiiiiicoooo/contract-intelligence-platform) | AI-powered contract analysis | Contract analysis agents authenticate through AgentGate for secret access |
 | [Portfolio Intelligence Hub](https://github.com/riiiiiicoooo/portfolio-intelligence-hub) | RAG-powered analytics for real estate | Text-to-SQL and RAG agents use AgentGate for scoped database access |
 
+## Engagement & Budget
+
+### Team & Timeline
+
+| Role | Allocation | Duration |
+|------|-----------|----------|
+| Lead PM (Jacob) | 20 hrs/week | 14 weeks |
+| Lead Developer (US) | 40 hrs/week | 14 weeks |
+| Offshore Developer(s) | 2 × 35 hrs/week | 14 weeks |
+| QA Engineer | 20 hrs/week | 14 weeks |
+
+**Timeline:** 14 weeks total across 3 phases
+- **Phase 1: Discovery & Design** (3 weeks) — Agent inventory across 12 squads, secret sprawl audit, policy requirements gathering, OAuth 2.0 flow design, compliance gap analysis (SOC 2)
+- **Phase 2: Core Build** (8 weeks) — Identity management + OAuth server, policy engine (OPA/Rego), JIT secrets broker, audit logging pipeline, TypeScript SDK + CLI, token budgeting system
+- **Phase 3: Integration & Launch** (3 weeks) — Vault/AWS Secrets Manager/1Password connectors, Grafana dashboards, Promptfoo adversarial evals, squad-by-squad rollout (platform team → all 12 squads)
+
+### Budget Summary
+
+| Category | Cost | Notes |
+|----------|------|-------|
+| PM & Strategy | $51,800 | Discovery, specs, stakeholder management |
+| Development (Lead + Offshore) | $139,440 | Core platform build |
+| QA Engineer | $9,800 | Testing and quality assurance |
+| AI/LLM Token Budget | $3,500/total | Claude Haiku for prompt injection detection (~3M tokens/month) × 14 weeks |
+| Infrastructure | $6,720/total | Supabase Pro ($25/mo), Redis ($65/mo), AWS (ECS, RDS, ElastiCache) ($250/mo), Grafana ($25/mo), misc ($115/mo) × 14 weeks |
+| **Total Engagement** | **$200,000** | Fixed-price, phases billed at milestones |
+| **Ongoing Run Rate** | **$900/month** | Infrastructure + AI tokens + support |
+
+---
+
 ## About
 
 Built by [Ampersand Consulting](https://github.com/riiiiiicoooo) — a product management consultancy that helps companies ship AI-powered products. AgentGate was built for a Series B developer tools company to secure AI agent access across 340+ developer environments.
