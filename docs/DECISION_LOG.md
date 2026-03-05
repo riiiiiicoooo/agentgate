@@ -586,6 +586,38 @@ Evaluate policies at request time (every secret request).
 
 ---
 
+## ADR-014: Session-Scoped Secrets Over Per-Request Provisioning
+
+**Date**: 2024-01-14
+**Status**: Accepted (supersedes earlier approach)
+**Author**: Jacob
+
+### Context
+
+Initially implemented per-request secret provisioning — every API call from an agent triggered a fresh credential fetch from the secrets broker. Seemed like the most secure approach (minimal credential exposure window).
+
+### What Happened
+
+Load testing revealed 400ms+ overhead per API call. In a typical agent workflow (50-100 API calls per task), this added 20-40 seconds of latency. Developer experience testing showed agents timing out on complex tasks. Two pilot teams reported agents "hanging" during multi-step operations.
+
+### Decision
+
+Switched to session-scoped secrets with configurable TTL (default 15 minutes). Agent authenticates once, receives a session token with scoped credentials, credentials auto-expire at session end or TTL.
+
+### Rationale
+
+95% latency reduction (400ms → 18ms per call). Security tradeoff is acceptable: 15-minute window vs. per-request is minimal risk increase, and session revocation provides immediate kill switch.
+
+### Consequences
+
+Had to build session management layer (2 weeks additional work). Needed to add session revocation to the admin dashboard. Audit logging now captures session-level events, not per-request events (less granular but still sufficient for SOC 2).
+
+### Lesson
+
+Security purity that destroys developer experience is no security at all — developers will work around it.
+
+---
+
 ## Decision Rationale Summary
 
 **Security over Performance** (when trade-off exists)
