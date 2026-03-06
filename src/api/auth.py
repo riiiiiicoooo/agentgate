@@ -16,7 +16,7 @@ from enum import Enum
 
 import jwt
 from fastapi import HTTPException, status, Depends
-from fastapi.security import HTTPBearer, HTTPAuthenticationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +398,7 @@ security = HTTPBearer()
 
 
 async def get_current_agent(
-    credentials: HTTPAuthenticationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> AgentCredentials:
     """
     FastAPI dependency to extract and validate agent credentials.

@@ -9,8 +9,9 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Callable
+from typing import Callable, Optional
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -28,12 +29,24 @@ from src.api import auth, endpoints
 from src.db import connection
 from src.audit import logger as audit_logger
 
+# ============================================================================
+# PRODUCTION NOTES
+# This is a portfolio demonstration. In a production deployment:
+# - JWT signing keys would be managed via HashiCorp Vault or AWS Secrets Manager
+# - Agent-to-gateway communication would use mTLS with SPIFFE/SPIRE identities
+# - Rate limiting would use Redis Sentinel/Cluster for high availability
+# - OpenTelemetry traces would export to Datadog/Grafana Cloud, not local Jaeger
+# ============================================================================
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Redis client for rate limiting (initialized at startup)
+redis_client: Optional[aioredis.Redis] = None
 
 # OpenTelemetry setup
 def setup_observability() -> None:
@@ -83,6 +96,17 @@ async def lifespan(app: FastAPI):
         setup_observability()
         logger.info("Observability initialized")
 
+        # Initialize Redis for rate limiting
+        global redis_client
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        try:
+            redis_client = aioredis.from_url(redis_url, decode_responses=True)
+            await redis_client.ping()
+            logger.info("Redis connected for rate limiting")
+        except Exception as e:
+            logger.warning(f"Redis unavailable, rate limiting disabled: {e}")
+            redis_client = None
+
         # Initialize audit logger
         await audit_logger.init()
         logger.info("Audit system initialized")
@@ -105,6 +129,8 @@ async def lifespan(app: FastAPI):
         try:
             await audit_logger.flush()
             await connection.close_db()
+            if redis_client:
+                await redis_client.close()
             logger.info("Graceful shutdown completed")
         except Exception as e:
             logger.error(f"Shutdown error: {e}", exc_info=True)
@@ -184,24 +210,66 @@ async def request_logging_middleware(request: Request, call_next: Callable) -> J
 
 
 # Rate limiting middleware
+RATE_LIMIT_PER_MINUTE = 1000
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next: Callable) -> JSONResponse:
     """
-    Apply rate limiting based on agent identity and API key.
+    Apply per-agent rate limiting using Redis sliding window counter.
 
-    Rate limits are enforced per agent with burst allowance.
+    Limits: 1000 requests per 60-second window per agent identity.
+    Health endpoints are exempt. Falls back to no limiting if Redis is unavailable.
     """
-    # Extract agent identity
+    # Skip rate limiting for health endpoints
+    if request.url.path.startswith("/health"):
+        return await call_next(request)
+
+    # Skip if Redis is unavailable
+    if not redis_client:
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_MINUTE)
+        response.headers["X-RateLimit-Remaining"] = "unknown"
+        return response
+
     agent_id = getattr(request.state, "agent_id", "anonymous")
+    rate_key = f"ratelimit:{agent_id}"
 
-    # Check rate limit (would use Redis in production)
-    # This is a placeholder for actual rate limiting logic
+    try:
+        current = await redis_client.incr(rate_key)
+        if current == 1:
+            await redis_client.expire(rate_key, RATE_LIMIT_WINDOW_SECONDS)
 
-    response = await call_next(request)
-    response.headers["X-RateLimit-Limit"] = "1000"
-    response.headers["X-RateLimit-Remaining"] = "999"
+        remaining = max(0, RATE_LIMIT_PER_MINUTE - current)
+        ttl = await redis_client.ttl(rate_key)
 
-    return response
+        if current > RATE_LIMIT_PER_MINUTE:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Rate limit exceeded",
+                    "detail": f"Limit: {RATE_LIMIT_PER_MINUTE} requests per {RATE_LIMIT_WINDOW_SECONDS}s",
+                    "retry_after": max(ttl, 1),
+                },
+                headers={
+                    "X-RateLimit-Limit": str(RATE_LIMIT_PER_MINUTE),
+                    "X-RateLimit-Remaining": "0",
+                    "Retry-After": str(max(ttl, 1)),
+                },
+            )
+
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_MINUTE)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
+
+    except Exception as e:
+        logger.warning(f"Rate limiting error, allowing request: {e}")
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_MINUTE)
+        response.headers["X-RateLimit-Remaining"] = "unknown"
+        return response
 
 
 # Include routers

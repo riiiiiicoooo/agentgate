@@ -26,14 +26,11 @@ jobs:
           pip install black flake8 isort
 
       - name: Black formatting check
-        run: black --check agentgate/ tests/ || true
-
+        run: black --check agentgate/ tests/
       - name: iSort import sorting check
-        run: isort --check-only agentgate/ tests/ || true
-
+        run: isort --check-only agentgate/ tests/
       - name: Flake8 linting
-        run: flake8 agentgate/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
-
+        run: flake8 agentgate/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
   test:
     name: Unit & Integration Tests
     runs-on: ubuntu-latest
@@ -81,8 +78,7 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/agentgate_test
           REDIS_URL: redis://localhost:6379/0
         run: |
-          pytest tests/ -v --cov=agentgate --cov-report=xml || true
-
+          pytest tests/ -v --cov=agentgate --cov-report=xml
   security-scan:
     name: Security Scanning
     runs-on: ubuntu-latest
@@ -104,8 +100,7 @@ jobs:
       - name: Safety check for dependencies
         run: |
           pip install safety
-          safety check --json || true
-
+          safety check --json
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
@@ -216,4 +211,4 @@ jobs:
       - name: Run prompt injection evals
         run: |
           cd evals/promptfoo
-          promptfoo eval --config promptfooconfig.yaml --output eval-results.json || true
+          promptfoo eval --config promptfooconfig.yaml --output eval-results.json
