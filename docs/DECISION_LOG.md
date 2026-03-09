@@ -618,6 +618,58 @@ Security purity that destroys developer experience is no security at all — dev
 
 ---
 
+## ADR-015: Pivot from mTLS to OAuth 2.0 Client Credentials
+
+**Date:** 2024-02-15
+**Status:** Accepted (supersedes initial mTLS architecture)
+**Author:** Jacob
+
+### Context
+
+AgentGate's first architecture used mutual TLS (mTLS) with certificate-based authentication. The design was sound from a security perspective: agents would present X.509 certificates signed by a corporate CA, allowing bidirectional authentication without shared secrets. The model worked well in proof-of-concept testing with 3 pilot teams.
+
+### What Happened
+
+Pilot deployments revealed a critical operational bottleneck: certificate management. In production environments, developers discovered that:
+- Certificate renewal required coordinating with security teams to reissue certificates
+- Agents crashed silently when certificates expired (not discovered until customer reported outage)
+- Rotating certificates across multiple agent deployments required careful orchestration
+- Certificate provisioning took 2-3 days per agent due to approval workflows
+
+During the first pilot with 8 agents, 2 certificate expirations happened within a week, each requiring 30+ minutes of debugging. Team feedback was consistent: "The security is great but operationally this is killing us."
+
+### Decision
+
+Pivoted to OAuth 2.0 Client Credentials flow (ADR-001, implemented in revision) as the primary authentication method. This was the single most consequential decision for adoption.
+
+**Implementation changes:**
+- Agents authenticate with client_id and client_secret (credentials issued via admin panel)
+- Credentials can be rotated in-place without affecting agent deployment
+- Secrets can be revoked immediately in case of compromise
+- No certificate infrastructure required
+- Credential expiration is handled gracefully (agent requests new token)
+
+### Rationale
+
+OAuth 2.0 Client Credentials reduced agent onboarding from 2 days to 15 minutes. This single change drove 100% adoption among pilot teams. The security tradeoff (shared secret vs. mutual authentication) was acceptable because:
+
+1. **Operational simplicity:** Developers could issue new credentials instantly; no approval workflow
+2. **Graceful degradation:** Expired credentials trigger automatic refresh, not silent failure
+3. **Revocation speed:** A compromised secret can be rotated immediately (not waiting for CA to issue new cert)
+4. **Cross-platform consistency:** Same credential model works for CLI agents, container agents, and serverless agents
+
+### Consequences
+
+- **Short-term:** Rewrote authentication layer (1 week). Deprecated mTLS support.
+- **Long-term:** Customer feedback improved dramatically. NPS went from 6.2 (mTLS) to 8.1 (OAuth). Pilot teams cited "just works" as a key factor in adoption.
+- **Security:** Loss of mutual authentication was mitigated by adding request signing (HMAC-SHA256 on request body), providing a defense against man-in-the-middle attacks in scenario where secrets are compromised.
+
+### Lesson
+
+Security purity without operational feasibility is a failure. mTLS was architecturally superior but practically untenable. OAuth 2.0 Client Credentials won because it was secure enough and operationally trivial. Adoption > perfection.
+
+---
+
 ## Decision Rationale Summary
 
 **Security over Performance** (when trade-off exists)
