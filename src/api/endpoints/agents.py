@@ -5,6 +5,7 @@ CRUD operations for agent registration, credential rotation, and status manageme
 """
 
 import logging
+import json
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import uuid4
@@ -19,6 +20,7 @@ from src.api.auth import (
     AgentCredentials,
     ClientCredentialsFlow,
 )
+from src.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +104,7 @@ class AgentListResponse(BaseModel):
     limit: int
 
 
-# In-memory storage (replace with database in production)
-agents_db: dict = {}
+# Database operations (replaces in-memory agents_db dict)
 
 
 @router.post(
@@ -146,6 +147,7 @@ async def create_agent(
         client_id = f"YOUR_AGENTGATE_CLIENT_ID_{uuid4().hex[:12]}"
 
         # Create agent record
+        now = datetime.now(timezone.utc)
         agent_record = AgentResponse(
             agent_id=agent_id,
             name=request.name,
@@ -153,14 +155,31 @@ async def create_agent(
             scopes=request.scopes,
             client_id=client_id,
             status="active",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=now,
+            updated_at=now,
             last_auth_at=None,
             metadata=request.metadata or {},
         )
 
-        # Store in memory (would be database)
-        agents_db[agent_id] = agent_record.dict()
+        # Store in database
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO agents (agent_id, name, client_id, client_secret_hash, status, scopes, metadata, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                """,
+                agent_id,
+                request.name,
+                client_id,
+                "hash_placeholder",  # In production, hash the actual secret
+                "active",
+                request.scopes,
+                json.dumps(request.metadata or {}),
+                current_agent.agent_id,
+            )
+        finally:
+            await conn.close()
 
         logger.info(f"Agent created: {agent_id} by {current_agent.agent_id}")
         return agent_record
@@ -208,15 +227,36 @@ async def get_agent(
             detail="Insufficient permissions",
         )
 
-    agent = agents_db.get(agent_id)
-    if not agent:
-        logger.warning(f"Agent not found: {agent_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
+    try:
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT agent_id, name, client_id, status, scopes, metadata, created_at, updated_at, last_auth_at FROM agents WHERE agent_id = $1",
+                agent_id
+            )
+        finally:
+            await conn.close()
 
-    return AgentResponse(**agent)
+        if not row:
+            logger.warning(f"Agent not found: {agent_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent not found",
+            )
+
+        agent_data = dict(row)
+        agent_data['metadata'] = json.loads(agent_data.get('metadata') or '{}')
+        agent_data['description'] = None  # Not stored in agents table yet
+
+        return AgentResponse(**agent_data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get agent: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get agent",
+        )
 
 
 @router.get(
@@ -255,17 +295,39 @@ async def list_agents(
         )
 
     try:
-        # Filter agents
-        agents_list = list(agents_db.values())
+        conn = await get_connection()
+        try:
+            # Count total
+            count_query = "SELECT COUNT(*) FROM agents WHERE 1=1"
+            count_args = []
+            if status_filter:
+                count_query += " AND status = $1"
+                count_args.append(status_filter)
 
-        if status_filter:
-            agents_list = [a for a in agents_list if a.get("status") == status_filter]
+            total = await conn.fetchval(count_query, *count_args)
 
-        total = len(agents_list)
-        paginated = agents_list[offset : offset + limit]
+            # Fetch paginated results
+            query = "SELECT agent_id, name, client_id, status, scopes, metadata, created_at, updated_at, last_auth_at FROM agents WHERE 1=1"
+            args = []
+            if status_filter:
+                query += " AND status = $" + str(len(args) + 1)
+                args.append(status_filter)
+
+            query += f" ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
+
+            rows = await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+
+        agents_list = []
+        for row in rows:
+            agent_data = dict(row)
+            agent_data['metadata'] = json.loads(agent_data.get('metadata') or '{}')
+            agent_data['description'] = None
+            agents_list.append(AgentResponse(**agent_data))
 
         return AgentListResponse(
-            agents=[AgentResponse(**agent) for agent in paginated],
+            agents=agents_list,
             total=total,
             offset=offset,
             limit=limit,
@@ -316,14 +378,19 @@ async def rotate_credentials(
             detail="Insufficient permissions",
         )
 
-    agent = agents_db.get(agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
-
     try:
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow("SELECT agent_id FROM agents WHERE agent_id = $1", agent_id)
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent not found",
+            )
+
         response_data = {
             "agent_id": agent_id,
             "rotated_at": datetime.now(timezone.utc),
@@ -343,11 +410,21 @@ async def rotate_credentials(
             response_data["api_key"] = new_api_key
             logger.info(f"API key rotated for agent: {agent_id}")
 
-        # Update agent record
-        agents_db[agent_id]["updated_at"] = datetime.now(timezone.utc)
+        # Update agent record in database
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "UPDATE agents SET updated_at = $1 WHERE agent_id = $2",
+                datetime.now(timezone.utc),
+                agent_id
+            )
+        finally:
+            await conn.close()
 
         return CredentialRotationResponse(**response_data)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to rotate credentials: {e}", exc_info=True)
         raise HTTPException(
@@ -389,24 +466,50 @@ async def update_agent_status(
             detail="Insufficient permissions",
         )
 
-    agent = agents_db.get(agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
-
     try:
-        agent["status"] = request.status
-        agent["updated_at"] = datetime.now(timezone.utc)
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT agent_id, name, client_id, status, scopes, metadata, created_at, updated_at, last_auth_at FROM agents WHERE agent_id = $1",
+                agent_id
+            )
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent not found",
+            )
+
+        # Update status in database
+        now = datetime.now(timezone.utc)
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "UPDATE agents SET status = $1, updated_at = $2 WHERE agent_id = $3",
+                request.status,
+                now,
+                agent_id
+            )
+        finally:
+            await conn.close()
 
         logger.info(f"Agent status updated: {agent_id} -> {request.status}")
 
         if request.reason:
             logger.info(f"Status change reason: {request.reason}")
 
-        return AgentResponse(**agent)
+        agent_data = dict(row)
+        agent_data['status'] = request.status
+        agent_data['updated_at'] = now
+        agent_data['metadata'] = json.loads(agent_data.get('metadata') or '{}')
+        agent_data['description'] = None
 
+        return AgentResponse(**agent_data)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update agent status: {e}", exc_info=True)
         raise HTTPException(
@@ -443,19 +546,35 @@ async def delete_agent(
             detail="Insufficient permissions",
         )
 
-    if agent_id not in agents_db:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
-
     try:
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow("SELECT agent_id FROM agents WHERE agent_id = $1", agent_id)
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent not found",
+            )
+
         # Archive instead of delete
-        agents_db[agent_id]["status"] = "archived"
-        agents_db[agent_id]["updated_at"] = datetime.now(timezone.utc)
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "UPDATE agents SET status = $1, updated_at = $2 WHERE agent_id = $3",
+                "archived",
+                datetime.now(timezone.utc),
+                agent_id
+            )
+        finally:
+            await conn.close()
 
         logger.info(f"Agent archived: {agent_id}")
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete agent: {e}", exc_info=True)
         raise HTTPException(

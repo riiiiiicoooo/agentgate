@@ -6,13 +6,14 @@ LLM API proxy with rate limiting, token budget enforcement, and prompt injection
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_agent, AgentCredentials
+from src.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -72,15 +73,8 @@ class PromptInjectionAlert(BaseModel):
     remediation: str
 
 
-# Token budgets per agent (tokens per hour)
-token_budgets = {
-    "default": 10000,
-    "restricted": 1000,
-    "unlimited": None,
-}
-
-# Agent usage tracking
-agent_usage = {}  # agent_id -> {"tokens_used": int, "last_reset": datetime}
+# Token budgets per agent (stored in database - token_budgets table)
+# Agent usage tracking is stored in database or Redis (high-frequency reads)
 
 
 def check_prompt_injection(prompt: str) -> Optional[Dict[str, Any]]:
@@ -132,7 +126,7 @@ def check_prompt_injection(prompt: str) -> Optional[Dict[str, Any]]:
 
 async def get_agent_token_budget(agent_id: str) -> int:
     """
-    Get remaining token budget for an agent.
+    Get remaining token budget for an agent from database.
 
     Args:
         agent_id: Agent identifier
@@ -143,33 +137,68 @@ async def get_agent_token_budget(agent_id: str) -> int:
     Raises:
         ValueError: If agent has exceeded quota
     """
-    now = datetime.now(timezone.utc)
+    try:
+        conn = await get_connection()
+        try:
+            budget_row = await conn.fetchrow(
+                """
+                SELECT monthly_limit, hourly_limit, hourly_used, hourly_reset_at
+                FROM token_budgets WHERE agent_id = $1
+                """,
+                agent_id
+            )
 
-    if agent_id not in agent_usage:
-        agent_usage[agent_id] = {
-            "tokens_used": 0,
-            "last_reset": now,
-        }
+            if not budget_row:
+                # Create default budget entry
+                now = datetime.now(timezone.utc)
+                await conn.execute(
+                    """
+                    INSERT INTO token_budgets (agent_id, monthly_limit, hourly_limit, hourly_reset_at)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    agent_id,
+                    100000,  # Default monthly limit
+                    10000,   # Default hourly limit
+                    now,
+                )
+                return 10000
 
-    # Reset hourly budget
-    last_reset = agent_usage[agent_id]["last_reset"]
-    if (now - last_reset).total_seconds() > 3600:
-        agent_usage[agent_id]["tokens_used"] = 0
-        agent_usage[agent_id]["last_reset"] = now
+            # Check if hourly window needs reset
+            now = datetime.now(timezone.utc)
+            reset_at = budget_row['hourly_reset_at']
 
-    # Get budget tier (default to "default")
-    budget_limit = token_budgets.get("default", 10000)
+            if (now - reset_at).total_seconds() > 3600:
+                # Reset hourly budget
+                new_reset = now
+                await conn.execute(
+                    """
+                    UPDATE token_budgets SET hourly_used = 0, hourly_reset_at = $1
+                    WHERE agent_id = $2
+                    """,
+                    new_reset,
+                    agent_id,
+                )
+                return budget_row['hourly_limit'] or 10000
 
-    if budget_limit is None:  # unlimited
-        return 999999
+            hourly_limit = budget_row['hourly_limit'] or 10000
+            if hourly_limit is None:  # unlimited
+                return 999999
 
-    used = agent_usage[agent_id]["tokens_used"]
-    remaining = budget_limit - used
+            used = budget_row['hourly_used'] or 0
+            remaining = hourly_limit - used
 
-    if remaining <= 0:
-        raise ValueError(f"Token budget exhausted ({used}/{budget_limit})")
+            if remaining <= 0:
+                raise ValueError(f"Token budget exhausted ({used}/{hourly_limit})")
 
-    return remaining
+            return remaining
+        finally:
+            await conn.close()
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get token budget: {e}")
+        # Fall back to default
+        return 10000
 
 
 @router.post(
@@ -234,7 +263,7 @@ async def proxy_llm_request(
 
             # Log security event
             from src.api.endpoints.audit import log_audit_event
-            log_audit_event(
+            await log_audit_event(
                 event_type="policy_violation",
                 actor_agent_id=current_agent.agent_id,
                 resource_type="llm_request",
@@ -277,12 +306,26 @@ async def proxy_llm_request(
             "cost_estimate": (estimated_tokens * 0.00002),  # Rough estimate
         }
 
-        # Update agent usage
-        agent_usage[current_agent.agent_id]["tokens_used"] += estimated_tokens
+        # Update agent usage in database
+        try:
+            conn = await get_connection()
+            try:
+                await conn.execute(
+                    """
+                    UPDATE token_budgets SET hourly_used = hourly_used + $1
+                    WHERE agent_id = $2
+                    """,
+                    estimated_tokens,
+                    current_agent.agent_id,
+                )
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to update token usage: {e}")
 
         # Log successful request
         from src.api.endpoints.audit import log_audit_event
-        log_audit_event(
+        await log_audit_event(
             event_type="agent_llm_request",
             actor_agent_id=current_agent.agent_id,
             resource_type="llm_model",
@@ -349,18 +392,35 @@ async def get_token_budget(
         )
 
     try:
+        conn = await get_connection()
+        try:
+            budget_row = await conn.fetchrow(
+                """
+                SELECT hourly_limit, hourly_used, hourly_reset_at
+                FROM token_budgets WHERE agent_id = $1
+                """,
+                agent_id
+            )
+        finally:
+            await conn.close()
+
+        if not budget_row:
+            budget_limit = 10000
+            used = 0
+            reset_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        else:
+            budget_limit = budget_row['hourly_limit'] or 10000
+            used = budget_row['hourly_used'] or 0
+            reset_at = budget_row['hourly_reset_at'] + timedelta(hours=1)
+
         remaining = await get_agent_token_budget(agent_id)
-        used = agent_usage.get(agent_id, {}).get("tokens_used", 0)
-        budget_limit = token_budgets.get("default", 10000)
 
         return {
             "agent_id": agent_id,
             "budget_limit": budget_limit,
             "tokens_used": used,
             "tokens_remaining": remaining,
-            "reset_at": (
-                agent_usage[agent_id]["last_reset"] + datetime.timedelta(hours=1)
-            ).isoformat(),
+            "reset_at": reset_at.isoformat(),
         }
 
     except Exception as e:

@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_agent, AgentCredentials
+from src.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +123,9 @@ class SecurityIncident(BaseModel):
     remediation_status: str
 
 
-# In-memory audit storage
-audit_events_db: List[AuditEvent] = []
+# Database operations (replaces audit_events_db list)
 
-
-def log_audit_event(
+async def log_audit_event(
     event_type: str,
     actor_agent_id: str,
     resource_type: str,
@@ -138,7 +137,7 @@ def log_audit_event(
     actor_ip: Optional[str] = None,
 ) -> str:
     """
-    Internal function to log audit events.
+    Internal function to log audit events to database.
 
     Args:
         event_type: Type of event
@@ -159,26 +158,37 @@ def log_audit_event(
     event_id = f"evt_{uuid4()}"
     now = datetime.now(timezone.utc)
 
-    event = AuditEvent(
-        event_id=event_id,
-        timestamp=now,
-        event_type=event_type,
-        actor_agent_id=actor_agent_id,
-        actor_ip=actor_ip,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        action=action,
-        status=status,
-        details=details,
-        severity=severity,
-    )
+    try:
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO audit_events (event_id, timestamp, event_type, actor_agent_id, actor_ip,
+                                         resource_type, resource_id, action, status, details, severity)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+                """,
+                event_id,
+                now,
+                event_type,
+                actor_agent_id,
+                actor_ip,
+                resource_type,
+                resource_id,
+                action,
+                status,
+                json.dumps(details),
+                severity,
+            )
+        finally:
+            await conn.close()
 
-    audit_events_db.append(event)
-
-    logger.info(
-        f"Audit event logged: {event_type} on {resource_type}:{resource_id} "
-        f"by {actor_agent_id} - {status}"
-    )
+        logger.info(
+            f"Audit event logged: {event_type} on {resource_type}:{resource_id} "
+            f"by {actor_agent_id} - {status}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to log audit event: {e}", exc_info=True)
+        # Don't raise - logging failures shouldn't crash the app
 
     return event_id
 
@@ -218,35 +228,70 @@ async def query_audit_logs(
         import time
         start_time = time.time()
 
-        # Apply filters
-        results = audit_events_db
+        # Build query with filters
+        query = "SELECT event_id, timestamp, event_type, actor_agent_id, actor_ip, resource_type, resource_id, action, status, details, severity FROM audit_events WHERE 1=1"
+        args = []
+        arg_count = 1
 
         if request.start_time:
-            results = [e for e in results if e.timestamp >= request.start_time]
+            query += f" AND timestamp >= ${arg_count}"
+            args.append(request.start_time)
+            arg_count += 1
 
         if request.end_time:
-            results = [e for e in results if e.timestamp <= request.end_time]
+            query += f" AND timestamp <= ${arg_count}"
+            args.append(request.end_time)
+            arg_count += 1
 
         if request.event_type:
-            results = [e for e in results if e.event_type == request.event_type]
+            query += f" AND event_type = ${arg_count}"
+            args.append(request.event_type)
+            arg_count += 1
 
         if request.actor_agent_id:
-            results = [e for e in results if e.actor_agent_id == request.actor_agent_id]
+            query += f" AND actor_agent_id = ${arg_count}"
+            args.append(request.actor_agent_id)
+            arg_count += 1
 
         if request.resource_type:
-            results = [e for e in results if e.resource_type == request.resource_type]
+            query += f" AND resource_type = ${arg_count}"
+            args.append(request.resource_type)
+            arg_count += 1
 
         if request.resource_id:
-            results = [e for e in results if e.resource_id == request.resource_id]
+            query += f" AND resource_id = ${arg_count}"
+            args.append(request.resource_id)
+            arg_count += 1
 
         if request.status:
-            results = [e for e in results if e.status == request.status]
+            query += f" AND status = ${arg_count}"
+            args.append(request.status)
+            arg_count += 1
 
         if request.severity:
-            results = [e for e in results if e.severity == request.severity]
+            query += f" AND severity = ${arg_count}"
+            args.append(request.severity)
+            arg_count += 1
 
-        total = len(results)
-        paginated = results[request.offset : request.offset + request.limit]
+        # Count total matching
+        count_query = query.replace("SELECT event_id, timestamp, event_type, actor_agent_id, actor_ip, resource_type, resource_id, action, status, details, severity FROM", "SELECT COUNT(*) FROM")
+
+        # Get paginated results
+        query += f" ORDER BY timestamp DESC LIMIT {request.limit} OFFSET {request.offset}"
+
+        conn = await get_connection()
+        try:
+            total = await conn.fetchval(count_query, *args)
+            rows = await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+
+        # Convert rows to AuditEvent objects
+        events = []
+        for row in rows:
+            event_dict = dict(row)
+            event_dict['details'] = json.loads(event_dict.get('details') or '{}')
+            events.append(AuditEvent(**event_dict))
 
         elapsed = (time.time() - start_time) * 1000  # ms
 
@@ -256,7 +301,7 @@ async def query_audit_logs(
         )
 
         return AuditQueryResponse(
-            events=paginated,
+            events=events,
             total=total,
             offset=request.offset,
             limit=request.limit,
@@ -308,15 +353,31 @@ async def export_audit_csv(
         import csv
         import io
 
-        # Apply filters
-        events = audit_events_db
+        # Build query with filters
+        query = "SELECT event_id, timestamp, event_type, actor_agent_id, resource_type, resource_id, action, status, severity FROM audit_events WHERE 1=1"
+        args = []
+        arg_count = 1
 
         if start_time:
-            events = [e for e in events if e.timestamp >= start_time]
+            query += f" AND timestamp >= ${arg_count}"
+            args.append(start_time)
+            arg_count += 1
         if end_time:
-            events = [e for e in events if e.timestamp <= end_time]
+            query += f" AND timestamp <= ${arg_count}"
+            args.append(end_time)
+            arg_count += 1
         if event_type:
-            events = [e for e in events if e.event_type == event_type]
+            query += f" AND event_type = ${arg_count}"
+            args.append(event_type)
+            arg_count += 1
+
+        query += " ORDER BY timestamp DESC"
+
+        conn = await get_connection()
+        try:
+            rows = await conn.fetch(query, *args)
+        finally:
+            await conn.close()
 
         # Generate CSV
         output = io.StringIO()
@@ -336,20 +397,20 @@ async def export_audit_csv(
         )
 
         writer.writeheader()
-        for event in events:
+        for row in rows:
             writer.writerow({
-                "event_id": event.event_id,
-                "timestamp": event.timestamp.isoformat(),
-                "event_type": event.event_type,
-                "actor_agent_id": event.actor_agent_id,
-                "resource_type": event.resource_type,
-                "resource_id": event.resource_id,
-                "action": event.action,
-                "status": event.status,
-                "severity": event.severity,
+                "event_id": row['event_id'],
+                "timestamp": row['timestamp'].isoformat(),
+                "event_type": row['event_type'],
+                "actor_agent_id": row['actor_agent_id'],
+                "resource_type": row['resource_type'],
+                "resource_id": row['resource_id'],
+                "action": row['action'],
+                "status": row['status'],
+                "severity": row['severity'],
             })
 
-        logger.info(f"Audit CSV exported ({len(events)} events) by {current_agent.agent_id}")
+        logger.info(f"Audit CSV exported ({len(rows)} events) by {current_agent.agent_id}")
 
         return StreamingResponse(
             iter([output.getvalue()]),
@@ -405,16 +466,47 @@ async def generate_compliance_report(
         now = datetime.now(timezone.utc)
         period_start = now - timedelta(days=period_days)
 
-        # Filter events from period
-        period_events = [e for e in audit_events_db if e.timestamp >= period_start]
+        conn = await get_connection()
+        try:
+            # Get total events
+            total_events = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= $1",
+                period_start
+            )
+
+            # Get authentication events
+            auth_events = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= $1 AND event_type LIKE '%auth%'",
+                period_start
+            )
+
+            # Get policy violations
+            violations = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= $1 AND severity = 'critical'",
+                period_start
+            )
+
+            # Get credential rotations
+            rotations = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= $1 AND event_type LIKE '%credential_rotated%'",
+                period_start
+            )
+
+            # Get access control changes
+            access_changes = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= $1 AND event_type LIKE '%policy%'",
+                period_start
+            )
+        finally:
+            await conn.close()
 
         # Generate framework-specific findings
         findings = {
-            "total_events": len(period_events),
-            "authentication_events": len([e for e in period_events if "auth" in e.event_type]),
-            "policy_violations": len([e for e in period_events if e.severity == "critical"]),
-            "credential_rotations": len([e for e in period_events if "credential_rotated" in e.event_type]),
-            "access_control_changes": len([e for e in period_events if "policy" in e.event_type]),
+            "total_events": total_events or 0,
+            "authentication_events": auth_events or 0,
+            "policy_violations": violations or 0,
+            "credential_rotations": rotations or 0,
+            "access_control_changes": access_changes or 0,
         }
 
         report = ComplianceReport(
@@ -425,7 +517,7 @@ async def generate_compliance_report(
             period_start=period_start,
             period_end=now,
             findings=findings,
-            evidence_count=len(period_events),
+            evidence_count=total_events or 0,
             summary=f"Compliance report for {framework} covering {period_days} days. "
                    f"{findings['total_events']} audit events recorded. "
                    f"{findings['policy_violations']} policy violations detected.",
@@ -481,25 +573,35 @@ async def get_security_incidents(
     try:
         from uuid import uuid4
 
-        # Create incidents from critical/error events
-        incidents = []
-        critical_events = [
-            e for e in audit_events_db
-            if e.severity in ["critical", "error"]
-        ]
+        # Build query for critical/error events
+        query = "SELECT event_id, timestamp, event_type, actor_agent_id, action, resource_id, severity FROM audit_events WHERE severity IN ('critical', 'error')"
+        args = []
+        arg_count = 1
 
         if severity:
-            critical_events = [e for e in critical_events if e.severity == severity]
+            query += f" AND severity = ${arg_count}"
+            args.append(severity)
+            arg_count += 1
 
-        for event in critical_events[:limit]:
+        query += f" ORDER BY timestamp DESC LIMIT {limit}"
+
+        conn = await get_connection()
+        try:
+            rows = await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+
+        # Create incidents from critical/error events
+        incidents = []
+        for row in rows:
             incident = SecurityIncident(
                 incident_id=f"incident_{uuid4()}",
-                timestamp=event.timestamp,
-                severity=event.severity,
-                incident_type=event.event_type,
-                description=f"{event.event_type}: {event.action} on {event.resource_id}",
-                affected_resources=[event.resource_id],
-                actor_agent_id=event.actor_agent_id,
+                timestamp=row['timestamp'],
+                severity=row['severity'],
+                incident_type=row['event_type'],
+                description=f"{row['event_type']}: {row['action']} on {row['resource_id']}",
+                affected_resources=[row['resource_id']],
+                actor_agent_id=row['actor_agent_id'],
                 remediation_status="open",
             )
             incidents.append(incident)
@@ -544,21 +646,30 @@ async def get_audit_statistics(
         )
 
     try:
-        total_events = len(audit_events_db)
-        success_count = len([e for e in audit_events_db if e.status == "success"])
-        failure_count = len([e for e in audit_events_db if e.status == "failure"])
+        conn = await get_connection()
+        try:
+            total_events = await conn.fetchval("SELECT COUNT(*) FROM audit_events")
+            success_count = await conn.fetchval("SELECT COUNT(*) FROM audit_events WHERE status = 'success'")
+            failure_count = await conn.fetchval("SELECT COUNT(*) FROM audit_events WHERE status = 'failure'")
 
-        event_types = {}
-        for event in audit_events_db:
-            event_types[event.event_type] = event_types.get(event.event_type, 0) + 1
+            # Get event type counts
+            event_type_rows = await conn.fetch(
+                "SELECT event_type, COUNT(*) as count FROM audit_events GROUP BY event_type"
+            )
+            event_types = {row['event_type']: row['count'] for row in event_type_rows}
+
+            # Get unique actors
+            unique_actors = await conn.fetchval("SELECT COUNT(DISTINCT actor_agent_id) FROM audit_events")
+        finally:
+            await conn.close()
 
         stats = {
-            "total_events": total_events,
-            "success_events": success_count,
-            "failure_events": failure_count,
-            "success_rate": (success_count / total_events * 100) if total_events > 0 else 0,
+            "total_events": total_events or 0,
+            "success_events": success_count or 0,
+            "failure_events": failure_count or 0,
+            "success_rate": (success_count / total_events * 100) if (total_events or 0) > 0 else 0,
             "event_types": event_types,
-            "unique_actors": len(set(e.actor_agent_id for e in audit_events_db)),
+            "unique_actors": unique_actors or 0,
         }
 
         return stats

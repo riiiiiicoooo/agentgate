@@ -10,6 +10,7 @@ import json
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone
 from functools import lru_cache
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,9 @@ class PolicyEngine:
     def __init__(self, cache_size: int = 1000):
         self.compiled_policies: Dict[str, CompiledPolicy] = {}
         self.cache_size = cache_size
-        self.decision_cache: Dict[str, PolicyDecision] = {}
+        # Use OrderedDict for LRU-like behavior (replaces unbounded dict)
+        # In production, use Redis for distributed caching
+        self.decision_cache: OrderedDict = OrderedDict()
         logger.info(f"PolicyEngine initialized with cache size {cache_size}")
 
     async def load_default_policies(self) -> None:
@@ -388,11 +391,15 @@ class PolicyEngine:
         return hashlib.md5(input_data.encode()).hexdigest()
 
     def _cache_decision(self, key: str, decision: PolicyDecision) -> None:
-        """Cache a policy decision."""
+        """
+        Cache a policy decision with LRU eviction.
+
+        Replaces unbounded dict with OrderedDict for bounded memory.
+        In production, use Redis for distributed caching.
+        """
         if len(self.decision_cache) >= self.cache_size:
-            # Simple LRU: remove first item
-            oldest_key = next(iter(self.decision_cache))
-            del self.decision_cache[oldest_key]
+            # LRU: remove oldest (first) item
+            self.decision_cache.popitem(last=False)
 
         self.decision_cache[key] = decision
 

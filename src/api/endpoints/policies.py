@@ -5,6 +5,7 @@ Policy CRUD operations, agent-to-policy binding, and policy simulation.
 """
 
 import logging
+import json
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import uuid4
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_agent, AgentCredentials
+from src.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +149,7 @@ class PolicyListResponse(BaseModel):
     limit: int
 
 
-# In-memory storage
-policies_db: dict = {}
-bindings_db: dict = {}  # agent_id -> [policy_ids]
+# Database operations (replaces in-memory policies_db and bindings_db dicts)
 
 
 @router.post(
@@ -186,6 +186,7 @@ async def create_policy(
 
     try:
         policy_id = f"policy_{uuid4()}"
+        now = datetime.now(timezone.utc)
 
         policy_record = PolicyResponse(
             policy_id=policy_id,
@@ -193,12 +194,28 @@ async def create_policy(
             description=request.description,
             rules=request.rules,
             tags=request.tags or [],
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=now,
+            updated_at=now,
             created_by=current_agent.agent_id,
         )
 
-        policies_db[policy_id] = policy_record.dict()
+        # Store in database
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO policies (policy_id, name, description, rules, tags, created_by)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                """,
+                policy_id,
+                request.name,
+                request.description,
+                json.dumps([rule.dict() for rule in request.rules]),
+                request.tags or [],
+                current_agent.agent_id,
+            )
+        finally:
+            await conn.close()
 
         logger.info(f"Policy created: {policy_id} by {current_agent.agent_id}")
         return policy_record
@@ -239,14 +256,34 @@ async def get_policy(
             detail="Insufficient permissions",
         )
 
-    policy = policies_db.get(policy_id)
-    if not policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
+    try:
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT policy_id, name, description, rules, tags, created_at, updated_at, created_by FROM policies WHERE policy_id = $1",
+                policy_id
+            )
+        finally:
+            await conn.close()
 
-    return PolicyResponse(**policy)
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Policy not found",
+            )
+
+        policy_data = dict(row)
+        policy_data['rules'] = [PolicyRule(**rule) for rule in json.loads(policy_data.get('rules') or '[]')]
+
+        return PolicyResponse(**policy_data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get policy: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get policy",
+        )
 
 
 @router.get(
@@ -279,16 +316,38 @@ async def list_policies(
         )
 
     try:
-        policies_list = list(policies_db.values())
+        conn = await get_connection()
+        try:
+            # Count total
+            count_query = "SELECT COUNT(*) FROM policies WHERE 1=1"
+            count_args = []
+            if tag:
+                count_query += " AND $1 = ANY(tags)"
+                count_args.append(tag)
 
-        if tag:
-            policies_list = [p for p in policies_list if tag in p.get("tags", [])]
+            total = await conn.fetchval(count_query, *count_args)
 
-        total = len(policies_list)
-        paginated = policies_list[offset : offset + limit]
+            # Fetch paginated results
+            query = "SELECT policy_id, name, description, rules, tags, created_at, updated_at, created_by FROM policies WHERE 1=1"
+            args = []
+            if tag:
+                query += " AND $1 = ANY(tags)"
+                args.append(tag)
+
+            query += f" ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
+
+            rows = await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+
+        policies_list = []
+        for row in rows:
+            policy_data = dict(row)
+            policy_data['rules'] = [PolicyRule(**rule) for rule in json.loads(policy_data.get('rules') or '[]')]
+            policies_list.append(PolicyResponse(**policy_data))
 
         return PolicyListResponse(
-            policies=[PolicyResponse(**policy) for policy in paginated],
+            policies=policies_list,
             total=total,
             offset=offset,
             limit=limit,
@@ -332,23 +391,53 @@ async def update_policy(
             detail="Insufficient permissions",
         )
 
-    policy = policies_db.get(policy_id)
-    if not policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
-
     try:
-        policy["name"] = request.name
-        policy["description"] = request.description
-        policy["rules"] = [rule.dict() for rule in request.rules]
-        policy["tags"] = request.tags or []
-        policy["updated_at"] = datetime.now(timezone.utc)
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT policy_id, name, description, rules, tags, created_at, updated_at, created_by FROM policies WHERE policy_id = $1",
+                policy_id
+            )
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Policy not found",
+            )
+
+        now = datetime.now(timezone.utc)
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                """
+                UPDATE policies SET name = $1, description = $2, rules = $3::jsonb, tags = $4, updated_at = $5
+                WHERE policy_id = $6
+                """,
+                request.name,
+                request.description,
+                json.dumps([rule.dict() for rule in request.rules]),
+                request.tags or [],
+                now,
+                policy_id,
+            )
+        finally:
+            await conn.close()
 
         logger.info(f"Policy updated: {policy_id}")
-        return PolicyResponse(**policy)
 
+        policy_data = dict(row)
+        policy_data['name'] = request.name
+        policy_data['description'] = request.description
+        policy_data['rules'] = request.rules
+        policy_data['tags'] = request.tags or []
+        policy_data['updated_at'] = now
+
+        return PolicyResponse(**policy_data)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update policy: {e}", exc_info=True)
         raise HTTPException(
@@ -389,20 +478,29 @@ async def simulate_policy(
             detail="Insufficient permissions",
         )
 
-    policy = policies_db.get(policy_id)
-    if not policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
-
     try:
+        conn = await get_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT rules FROM policies WHERE policy_id = $1",
+                policy_id
+            )
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Policy not found",
+            )
+
         matching_rules = []
         decision = "no_match"
         reason = "No rules matched the request"
 
         # Simple policy evaluation
-        for rule_dict in policy.get("rules", []):
+        rules_data = json.loads(row['rules'] or '[]')
+        for rule_dict in rules_data:
             rule = PolicyRule(**rule_dict)
 
             # Check if action matches
@@ -453,7 +551,8 @@ async def simulate_policy(
             matching_rules=matching_rules,
             reason=reason,
         )
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Policy simulation failed: {e}", exc_info=True)
         raise HTTPException(
@@ -489,20 +588,36 @@ async def bind_policy_to_agent(
             detail="Insufficient permissions",
         )
 
-    if policy_id not in policies_db:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
-
     try:
-        if agent_id not in bindings_db:
-            bindings_db[agent_id] = []
+        conn = await get_connection()
+        try:
+            # Check if policy exists
+            policy_exists = await conn.fetchval("SELECT 1 FROM policies WHERE policy_id = $1", policy_id)
+            if not policy_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Policy not found",
+                )
 
-        if policy_id not in bindings_db[agent_id]:
-            bindings_db[agent_id].append(policy_id)
-            logger.info(f"Policy {policy_id} bound to agent {agent_id}")
+            # Check if binding already exists
+            binding_exists = await conn.fetchval(
+                "SELECT 1 FROM policy_bindings WHERE agent_id = $1 AND policy_id = $2",
+                agent_id,
+                policy_id
+            )
 
+            if not binding_exists:
+                await conn.execute(
+                    "INSERT INTO policy_bindings (agent_id, policy_id) VALUES ($1, $2)",
+                    agent_id,
+                    policy_id
+                )
+                logger.info(f"Policy {policy_id} bound to agent {agent_id}")
+        finally:
+            await conn.close()
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to bind policy: {e}", exc_info=True)
         raise HTTPException(
@@ -536,16 +651,24 @@ async def delete_policy(
             detail="Insufficient permissions",
         )
 
-    if policy_id not in policies_db:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy not found",
-        )
-
     try:
-        del policies_db[policy_id]
-        logger.info(f"Policy deleted: {policy_id}")
+        conn = await get_connection()
+        try:
+            # Check if policy exists
+            policy_exists = await conn.fetchval("SELECT 1 FROM policies WHERE policy_id = $1", policy_id)
+            if not policy_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Policy not found",
+                )
 
+            await conn.execute("DELETE FROM policies WHERE policy_id = $1", policy_id)
+            logger.info(f"Policy deleted: {policy_id}")
+        finally:
+            await conn.close()
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete policy: {e}", exc_info=True)
         raise HTTPException(
